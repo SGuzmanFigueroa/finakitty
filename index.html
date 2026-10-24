@@ -271,9 +271,11 @@ const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const sum = arr => arr.reduce((s,m) => s + (+m.monto||0), 0);
 
 const dia = () => state.config?.diaInicio || 28;
-function cycleIdOf(d){ let y = d.getFullYear(), m = d.getMonth(); if (d.getDate() < dia()) { m--; if (m < 0) { m = 11; y--; } } return `${y}-${pad(m+1)}`; }
+// El día de pago se ajusta a los meses cortos: un plan del 30 empieza el 28 o 29 en febrero
+const dayIn = (y, m, d) => new Date(y, m, Math.min(d, new Date(y, m + 1, 0).getDate()));
+function cycleIdOf(d){ let y = d.getFullYear(), m = d.getMonth(); if (d < dayIn(y, m, dia())) { m--; if (m < 0) { m = 11; y--; } } return `${y}-${pad(m+1)}`; }
 function shiftCycle(id,k){ const [y,m] = id.split('-').map(Number); const d = new Date(y, m-1+k, 1); return `${d.getFullYear()}-${pad(d.getMonth()+1)}`; }
-function cycleRange(id){ const [y,m] = id.split('-').map(Number); return {start:new Date(y,m-1,dia()), end:new Date(y,m,dia()-1)}; }
+function cycleRange(id){ const [y,m] = id.split('-').map(Number); const next = dayIn(y, m, dia()); return {start:dayIn(y, m-1, dia()), end:new Date(next.getFullYear(), next.getMonth(), next.getDate()-1)}; }
 function cycleName(id){ const r = cycleRange(id); return cap(MESES[r.end.getMonth()]) + ' ' + r.end.getFullYear(); }
 function baseCycle(){ let id = cycleIdOf(today()); const ini = state.config?.inicio; if (ini && id < ini) id = ini; return id; }
 const viewCycle = () => shiftCycle(baseCycle(), state.off);
@@ -312,7 +314,7 @@ function pagoItems(id){
     .map(k => {
       const dd = (CATS[k].g === 'ahorro' || k === 'moto_fondo') ? dia() : dias[k];
       let fecha = null;
-      if (dd) fecha = dd >= dia() ? new Date(r.start.getFullYear(), r.start.getMonth(), dd) : new Date(r.end.getFullYear(), r.end.getMonth(), dd);
+      if (dd) fecha = dd >= dia() ? dayIn(r.start.getFullYear(), r.start.getMonth(), dd) : dayIn(r.end.getFullYear(), r.end.getMonth(), dd);
       const mid = `p-${id}-${k}`;
       return {k, monto: +p.montos[k], fecha, mid, done: state.movs.find(m => m.id === mid)};
     })
