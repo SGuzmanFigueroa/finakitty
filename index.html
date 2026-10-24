@@ -282,9 +282,15 @@ const viewCycle = () => shiftCycle(baseCycle(), state.off);
 const movsIn = (r) => { const a = ymd(r.start), b = ymd(r.end); return state.movs.filter(m => m.fecha >= a && m.fecha <= b); };
 
 // soloBase: el mes "normal", sin los montos propios de ese mes
+// Metas que crea la persona: {id, n, meta, mensual, fecha (AAAA-MM), desde (ciclo)}
+function propiaOf(k){ return (state.propias || []).find(p => p.id === k); }
+function syncPropias(){ for (const p of (state.propias || [])) CATS[p.id] = {n: p.n, g: 'ahorro', propia: true}; }
+function savePropias(){ LS.set('finakitty.metas', state.propias); syncPropias(); render(); }
+
 function planFor(id, soloBase){
   const c = state.config, ov = soloBase ? {} : (c.ciclos||{})[id] || {};
   const montos = {...(c.base?.montos||{}), ...(ov.montos||{})};
+  for (const pr of (state.propias || [])) if (+pr.mensual > 0 && id >= pr.desde && !(pr.id in montos)) montos[pr.id] = +pr.mensual;
   for (const t of (c.traslados||[])) if (id > t.hasta && +montos[t.cat]) { montos[t.a] = (+montos[t.a]||0) + (+montos[t.cat]); montos[t.cat] = 0; }
   const ingreso = ov.ingreso ?? c.base?.ingreso ?? 0;
   const extras = ov.extras || [];
@@ -414,7 +420,7 @@ function vPagos(){
   return `${cycNav(id)}
   <section class="card"><h2>El día que te pagan (en este orden)</h2>
     <ol class="steps">
-      <li>Apenas llegue tu sueldo, pasa <b class="num">${money(g.ahorro)}</b> a tu cuenta Interbank de ahorro (${['brasil','emergencia'].filter(k => +p.montos[k]).map(k => CATS[k].n + ' ' + money0(p.montos[k])).join(', ')}). Primero ahorras, después gastas.</li>
+      <li>Apenas llegue tu sueldo, pasa <b class="num">${money(g.ahorro)}</b> a tu cuenta Interbank de ahorro (${Object.keys(p.montos).filter(k => CATS[k]?.g === 'ahorro' && +p.montos[k]).map(k => CATS[k].n + ' ' + money0(p.montos[k])).join(', ')}). Primero ahorras, después gastas.</li>
       ${+p.montos.kashin ? `<li>Paga Kashin: <b class="num">${money(p.montos.kashin)}</b>. Mientras antes, mejor.</li>` : ''}
       <li>Pasa tu primera semanal, <b class="num">${money0(libreStatus(p, cycleRange(id), today(), []).semanal)}</b>, a la cuenta de tu Yape. Es lo único que gastas esa semana.</li>
       <li>Lo demás se queda en tu BCP sueldo para Bitel, WIN, Netflix y pasajes.</li>
@@ -437,12 +443,13 @@ function deudaPagada(k){ const c = state.config.metas?.[k] || {}; return sum(sta
 function vMetas(){
   const p = planFor(baseCycle()), pn = planFor(shiftCycle(baseCycle(), 1)), M = state.config.metas || {};
   const ahorroCard = k => {
-    const meta = +M[k]?.meta || 0, s = metaSaldo(k), mens = +pn.montos[k] || +p.montos[k] || 0;
+    const md = M[k] || propiaOf(k) || {}, meta = +md.meta || 0, s = metaSaldo(k), mens = +pn.montos[k] || +p.montos[k] || 0;
     const falta = Math.max(0, meta - s), meses = mens > 0 ? Math.ceil(falta / mens) : null;
-    return `<section class="card"><div class="row2"><h2>${CATS[k].n}</h2>${s >= meta && meta ? '<span class="pill ok">Lograda</span>' : ''}</div>
+    const fechaTxt = md.fecha ? `Para ${MESES[+md.fecha.slice(5) - 1]} de ${md.fecha.slice(0, 4)}. ` : '';
+    return `<section class="card"><div class="row2"><h2>${esc(CATS[k].n)}</h2>${s >= meta && meta ? '<span class="pill ok">Lograda</span>' : ''}${md.desde ? `<button class="x" data-act="delmeta" data-id="${esc(k)}">Borrar</button>` : ''}</div>
       <div class="meta-big"><b class="num">${money(s)}</b><span class="num">meta ${money0(meta)}</span></div>
       ${barHTML(0,1).replace('style="width:0%"', `style="width:${meta ? Math.min(100, s/meta*100) : 0}%"`).replace('<i class="', '<i class="gold ')}
-      <div class="sub">${M[k]?.nota ? esc(M[k].nota) + ' ' : ''}${falta > 0 ? (meses ? `Con ${money0(mens)} al mes llegas en unos ${meses} ${meses === 1 ? 'mes' : 'meses'}.` : 'Aún no tiene aporte mensual.') : ''}</div></section>`;
+      <div class="sub">${md.nota ? esc(md.nota) + ' ' : fechaTxt}${falta > 0 ? (meses ? `Con ${money0(mens)} al mes llegas en unos ${meses} ${meses === 1 ? 'mes' : 'meses'}.` : 'Aún no tiene aporte mensual.') : ''}</div></section>`;
   };
   const deudaCard = (k, titulo) => {
     const tot = +M[k]?.deuda || 0, pag = deudaPagada(k), pend = Math.max(0, tot - pag), mens = +p.montos[k] || +pn.montos[k] || 0;
@@ -452,13 +459,22 @@ function vMetas(){
       <div class="bar"><i style="width:${tot ? Math.min(100, pag/tot*100) : 0}%"></i></div>
       <div class="sub">${M[k]?.nota ? esc(M[k].nota) : ''}</div></section>`;
   };
-  return `${ahorroCard('brasil')}${ahorroCard('emergencia')}
+  const propias = (state.propias || []).map(pr => pr.id);
+  return `${ahorroCard('brasil')}${ahorroCard('emergencia')}${propias.map(ahorroCard).join('')}
     ${deudaCard('kashin', 'Préstamo Kashin')}
     <section class="card"><h2>Mover dinero de una meta</h2>
-      <div class="two"><label class="field"><span class="label">Meta</span><select id="mt-k">${['brasil','emergencia'].map(k => `<option value="${k}">${CATS[k].n}</option>`).join('')}</select></label>
+      <div class="two"><label class="field"><span class="label">Meta</span><select id="mt-k">${['brasil','emergencia', ...propias].map(k => `<option value="${esc(k)}">${esc(CATS[k].n)}</option>`).join('')}</select></label>
       <label class="field"><span class="label">Monto</span><input id="mt-m" inputmode="decimal" placeholder="0.00"></label></div>
       <div class="two"><button class="btn" data-act="meta" data-s="1">Aporte extra</button><button class="btn ghost" data-act="meta" data-s="-1">Retiro</button></div>
       <div class="sub">Los aportes del día de pago se suman solos cuando los marcas en Pagos. Usa esto para extras, como un ingreso extra, o si sacas plata de una meta.</div>
+    </section>
+    <section class="card"><h2>Nueva meta</h2>
+      <label class="field"><span class="label">¿Para qué ahorras?</span><input id="nm-n" maxlength="40" placeholder="Ej.: Celular nuevo, cumple de mamá"></label>
+      <div class="two"><label class="field"><span class="label">¿Cuánto necesitas?</span><input id="nm-meta" inputmode="decimal" placeholder="0.00"></label>
+      <label class="field"><span class="label">¿Para cuándo? (opcional)</span><input id="nm-fecha" type="month"></label></div>
+      <label class="field"><span class="label">Aporte al mes (opcional)</span><input id="nm-mens" inputmode="decimal" placeholder="Si pones fecha, lo calculo yo"></label>
+      <button class="btn" data-act="newmeta">Crear meta</button>
+      <div class="sub">El aporte al mes se suma a tu reparto del sueldo y aparece en Pagos para que lo transfieras a Interbank.</div>
     </section>`;
 }
 
@@ -606,6 +622,26 @@ $('#view').addEventListener('click', async e => {
     const monto = num($('#pg-' + it.k)?.value ?? it.monto);
     write(() => state.db.collection('movs').doc(it.mid).set({tipo: CATS[it.k].g === 'ahorro' ? 'ahorro' : 'pago', cat: it.k, monto, fecha: ymd(f), medio: 'transferencia', nota: '', ciclo: id, creado: Date.now()}), `${CATS[it.k].n} marcado`);
   }
+  else if (act === 'newmeta') {
+    const n = $('#nm-n').value.trim(), meta = num($('#nm-meta').value), fecha = $('#nm-fecha').value;
+    let mensual = num($('#nm-mens').value);
+    if (!n) { toast('Ponle un nombre a tu meta.'); return; }
+    if (meta <= 0) { toast('Escribe cuánto necesitas.'); return; }
+    if (!mensual && fecha) {
+      const [fy, fm] = fecha.split('-').map(Number), t = today();
+      const meses = Math.max(1, (fy - t.getFullYear()) * 12 + (fm - 1 - t.getMonth()));
+      mensual = Math.ceil(meta / meses);
+    }
+    state.propias = (state.propias || []).concat({id: 'mp-' + Date.now().toString(36), n: n.slice(0, 40), meta, mensual, fecha, desde: baseCycle()});
+    savePropias();
+    toast(mensual ? `Meta creada: ${money0(mensual)} al mes` : 'Meta creada');
+  }
+  else if (act === 'delmeta') {
+    if (delArmed !== b.dataset.id) { delArmed = b.dataset.id; b.textContent = '¿Borrar meta?'; b.classList.add('sure'); setTimeout(() => { if (delArmed === b.dataset.id) { delArmed = null; render(); } }, 3000); return; }
+    delArmed = null;
+    state.propias = (state.propias || []).filter(pr => pr.id !== b.dataset.id);
+    savePropias(); toast('Meta borrada. La plata que moviste sigue en tu cuenta.');
+  }
   else if (act === 'meta') {
     const k = $('#mt-k').value, m = num($('#mt-m').value) * +b.dataset.s;
     if (!m) { toast('Escribe un monto.'); return; }
@@ -628,13 +664,13 @@ $('#view').addEventListener('click', async e => {
     else toast('Ese link no está completo. Cópialo otra vez entero.');
   }
   else if (act === 'backup') {
-    if (window.FinaKittyAndroid) { FinaKittyAndroid.saveText('finakitty-respaldo-' + ymd(today()) + '.json', JSON.stringify({app: 'finakitty', v: 1, fecha: new Date().toISOString(), config: state.config, movs: state.movs}, null, 2)); return; }
-    const blob = new Blob([JSON.stringify({app: 'finakitty', v: 1, fecha: new Date().toISOString(), config: state.config, movs: state.movs}, null, 2)], {type: 'application/json'});
+    if (window.FinaKittyAndroid) { FinaKittyAndroid.saveText('finakitty-respaldo-' + ymd(today()) + '.json', JSON.stringify({app: 'finakitty', v: 1, fecha: new Date().toISOString(), config: state.config, movs: state.movs, metasPropias: state.propias}, null, 2)); return; }
+    const blob = new Blob([JSON.stringify({app: 'finakitty', v: 1, fecha: new Date().toISOString(), config: state.config, movs: state.movs, metasPropias: state.propias}, null, 2)], {type: 'application/json'});
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'finakitty-respaldo-' + ymd(today()) + '.json';
     document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
   else if (act === 'copyjson') {
-    const txt = JSON.stringify({config: state.config, movs: state.movs});
+    const txt = JSON.stringify({config: state.config, movs: state.movs, metasPropias: state.propias});
     try { await navigator.clipboard.writeText(txt); toast('Datos copiados. Pégalos en tu chat con Claude.'); }
     catch(_) { toast('No se pudo copiar. Usa Descargar respaldo.'); }
   }
@@ -650,7 +686,7 @@ $('#view').addEventListener('change', e => {
     const f = el.files && el.files[0]; if (!f) return;
     f.text().then(t => {
       const d = JSON.parse(t); if (!d.config || !Array.isArray(d.movs)) throw 0;
-      state.config = d.config; state.movs = d.movs; saveLocal(); toast('Respaldo restaurado');
+      state.config = d.config; state.movs = d.movs; state.propias = d.metasPropias || []; LS.set('finakitty.metas', state.propias); syncPropias(); saveLocal(); toast('Respaldo restaurado');
     }).catch(() => toast('Ese archivo no es un respaldo de esta app.'));
     return;
   }
@@ -816,6 +852,7 @@ $('#view').addEventListener('input', e => { if (e.target.tagName === 'TEXTAREA')
   state.db = ok ? localDb : null;
   state.config = LS.get('finakitty.config', null);
   state.movs = LS.get('finakitty.movs', []);
+  state.propias = LS.get('finakitty.metas', []); syncPropias();
   state.loadedCfg = state.loadedMovs = true;
   if (ok && /(^|[#&])(k|plan)=/.test(location.hash)) {
     const h = location.hash;
