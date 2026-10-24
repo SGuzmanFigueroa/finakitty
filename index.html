@@ -626,6 +626,7 @@ $('#view').addEventListener('click', async e => {
     else toast('Ese link no está completo. Cópialo otra vez entero.');
   }
   else if (act === 'backup') {
+    if (window.FinaKittyAndroid) { FinaKittyAndroid.saveText('finakitty-respaldo-' + ymd(today()) + '.json', JSON.stringify({app: 'finakitty', v: 1, fecha: new Date().toISOString(), config: state.config, movs: state.movs}, null, 2)); return; }
     const blob = new Blob([JSON.stringify({app: 'finakitty', v: 1, fecha: new Date().toISOString(), config: state.config, movs: state.movs}, null, 2)], {type: 'application/json'});
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'finakitty-respaldo-' + ymd(today()) + '.json';
     document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
